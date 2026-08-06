@@ -1,11 +1,11 @@
 {
   "expo": {
-    "name": "MyApp",
-    "slug": "MyApp",
+    "name": "Snowflake Journal",
+    "slug": "snowflake-journal",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "dark",
     "ios": {
       "supportsTablet": true
     },
@@ -18,7 +18,16 @@
       }
     },
     "web": {
-      "favicon": "./assets/favicon.png"
+      "favicon": "./assets/favicon.png",
+      "name": "Snowflake Journal",
+      "shortName": "Snowflake",
+      "description": "Track your growth, one deed at a time.",
+      "themeColor": "#0A0E1A",
+      "backgroundColor": "#0A0E1A",
+      "splash": {
+        "image": "./assets/icon.png",
+        "backgroundColor": "#0A0E1A"
+      }
     },
     "plugins": [
       "expo-secure-store"
