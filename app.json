@@ -24,6 +24,7 @@
       "description": "Track your growth, one deed at a time.",
       "themeColor": "#0A0E1A",
       "backgroundColor": "#0A0E1A",
+      "icon": "./assets/icon.png",
       "splash": {
         "image": "./assets/icon.png",
         "backgroundColor": "#0A0E1A"
