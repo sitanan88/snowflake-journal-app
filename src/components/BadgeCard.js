@@ -5,8 +5,8 @@ import { COLORS, SPACING, RADIUS, FONT } from '../theme';
 export default function BadgeCard({ badge, unlocked, justUnlocked }) {
   const wasUnlocked = useRef(unlocked && !justUnlocked);
 
-  // Color overlay — starts at 1 if already unlocked, 0 if locked
-  const colorOpacity = useRef(new Animated.Value(wasUnlocked.current ? 1 : 0)).current;
+  // Color overlay — starts at full tint if already unlocked, 0 if locked
+  const colorOpacity = useRef(new Animated.Value(wasUnlocked.current ? 0.08 : 0)).current;
 
   // Icon scale + rotation for the unlock pop
   const iconScale = useRef(new Animated.Value(1)).current;
@@ -17,7 +17,7 @@ export default function BadgeCard({ badge, unlocked, justUnlocked }) {
 
     // Sweep color overlay in
     Animated.timing(colorOpacity, {
-      toValue:  1,
+      toValue:  0.08,
       duration: 700,
       useNativeDriver: true,
     }).start();
@@ -121,7 +121,6 @@ const styles = StyleSheet.create({
     right:           0,
     height:          80,
     backgroundColor: COLORS.accent2,
-    opacity:         0.08,
     borderRadius:    RADIUS.lg,
   },
   name: {
