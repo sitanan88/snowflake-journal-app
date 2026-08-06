@@ -3,22 +3,29 @@ import { View, StyleSheet, SafeAreaView, Platform } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 
 import { loadState, DEFAULT_STATE } from './src/utils/storage';
-import { AppProvider }  from './src/context/AppContext';
-import LoadingScreen    from './src/screens/LoadingScreen';
-import ErrorScreen      from './src/screens/ErrorScreen';
-import BottomNav        from './src/components/BottomNav';
-import Toast            from './src/components/Toast';
-import Header           from './src/components/Header';
-import { COLORS }       from './src/theme';
+import { AppProvider }    from './src/context/AppContext';
+import { AuthProvider, useAuth } from './src/context/AuthContext';
+import LoadingScreen      from './src/screens/LoadingScreen';
+import ErrorScreen        from './src/screens/ErrorScreen';
+import AuthScreen         from './src/screens/AuthScreen';
+import BottomNav          from './src/components/BottomNav';
+import Toast              from './src/components/Toast';
+import Header             from './src/components/Header';
+import { COLORS }         from './src/theme';
 
-import TodayScreen    from './src/screens/TodayScreen';
-import TasksScreen    from './src/screens/TasksScreen';
+import TodayScreen     from './src/screens/TodayScreen';
+import TasksScreen     from './src/screens/TasksScreen';
 import SnowflakeScreen from './src/screens/SnowflakeScreen';
-import BadgesScreen   from './src/screens/BadgesScreen';
-import HistoryScreen  from './src/screens/HistoryScreen';
+import BadgesScreen    from './src/screens/BadgesScreen';
+import HistoryScreen   from './src/screens/HistoryScreen';
 
-export default function App() {
-  const [loadStatus,         setLoadStatus]         = useState('loading'); // 'loading' | 'error' | 'ready'
+// ─── Inner app (rendered only when signed in) ────────────────────────────────
+
+function SignedInApp() {
+  const { user } = useAuth();
+  const userId   = user.id;
+
+  const [loadStatus,         setLoadStatus]         = useState('loading');
   const [errorMsg,           setErrorMsg]           = useState('');
   const [initialState,       setInitialState]       = useState(null);
   const [activeTab,          setActiveTab]          = useState('today');
@@ -27,7 +34,7 @@ export default function App() {
 
   const attemptLoad = useCallback(() => {
     setLoadStatus('loading');
-    loadState()
+    loadState(userId)
       .then(data => {
         setInitialState(data ?? DEFAULT_STATE);
         setLoadStatus('ready');
@@ -36,7 +43,7 @@ export default function App() {
         setErrorMsg(err?.message || 'Unknown error reading storage.');
         setLoadStatus('error');
       });
-  }, []);
+  }, [userId]);
 
   useEffect(() => { attemptLoad(); }, []);
 
@@ -63,7 +70,7 @@ export default function App() {
   }
 
   return (
-    <AppProvider initialState={initialState} onBadgeUnlocked={handleBadgeUnlocked}>
+    <AppProvider initialState={initialState} userId={userId} onBadgeUnlocked={handleBadgeUnlocked}>
       <SafeAreaView style={styles.safe}>
         <StatusBar style="light" />
         <View style={styles.shell}>
@@ -80,6 +87,24 @@ export default function App() {
         <Toast ref={toastRef} />
       </SafeAreaView>
     </AppProvider>
+  );
+}
+
+// ─── Root (handles auth state) ───────────────────────────────────────────────
+
+function Root() {
+  const { user, loading } = useAuth();
+
+  if (loading) return <LoadingScreen />;
+  if (!user)   return <AuthScreen />;
+  return <SignedInApp />;
+}
+
+export default function App() {
+  return (
+    <AuthProvider>
+      <Root />
+    </AuthProvider>
   );
 }
 

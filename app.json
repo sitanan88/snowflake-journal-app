@@ -19,6 +19,12 @@
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "experiments": {
+      "baseUrl": "/snowflake-journal-app"
+    },
+    "plugins": [
+      "expo-secure-store"
+    ]
   }
 }

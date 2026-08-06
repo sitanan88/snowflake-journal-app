@@ -2,6 +2,7 @@ import React, { createContext, useContext, useReducer, useEffect, useMemo, useCa
 import { DEFAULT_STATE, saveState } from '../utils/storage';
 import { computeStats, checkBuiltinBadges, checkCustomBadges } from '../utils/stats';
 import { genId, getTodayStr } from '../utils/date';
+import * as Sync from '../lib/sync';
 
 const AppContext = createContext(null);
 
@@ -92,15 +93,23 @@ function reducer(state, action) {
 
 // ─── Provider ───────────────────────────────────────────────────────────────
 
-export function AppProvider({ children, initialState, onBadgeUnlocked }) {
+export function AppProvider({ children, initialState, userId, onBadgeUnlocked }) {
   const [state, dispatch] = useReducer(reducer, { ...DEFAULT_STATE, ...initialState });
 
-  // Auto-save on every state change (except initial load)
+  // Auto-save to local cache on every state change (after first render)
   const isMounted = React.useRef(false);
   useEffect(() => {
     if (!isMounted.current) { isMounted.current = true; return; }
-    saveState(state).catch(() => {}); // save errors are non-fatal after load
+    saveState(state, userId).catch(() => {});
   }, [state]);
+
+  // On mount: pull from Supabase and hydrate (background, non-blocking)
+  useEffect(() => {
+    if (!userId) return;
+    Sync.pullAll(userId)
+      .then(remote => { dispatch({ type: 'LOAD', payload: remote }); })
+      .catch(() => {}); // offline — local cache is fine
+  }, [userId]);
 
   // Recompute stats whenever entries change
   const stats = useMemo(() => computeStats(state.entries), [state.entries]);
@@ -111,113 +120,140 @@ export function AppProvider({ children, initialState, onBadgeUnlocked }) {
     const newBuiltin = checkBuiltinBadges(nextStats, nextState.unlockedBuiltinIds);
     const newCustom  = checkCustomBadges(nextState.customBadges, nextStats);
 
-    if (newBuiltin.length > 0) dispatch({ type: 'UNLOCK_BUILTIN_BADGES', payload: newBuiltin });
-    if (newCustom.length > 0)  dispatch({ type: 'UNLOCK_CUSTOM_BADGES',  payload: newCustom });
+    if (newBuiltin.length > 0) {
+      dispatch({ type: 'UNLOCK_BUILTIN_BADGES', payload: newBuiltin });
+      if (userId) {
+        const merged = [...new Set([...nextState.unlockedBuiltinIds, ...newBuiltin])];
+        Sync.pushSettings(userId, { ...nextState, unlockedBuiltinIds: merged }).catch(() => {});
+      }
+    }
+    if (newCustom.length > 0) dispatch({ type: 'UNLOCK_CUSTOM_BADGES', payload: newCustom });
 
     const allNew = [...newBuiltin, ...newCustom];
     if (allNew.length > 0 && onBadgeUnlocked) onBadgeUnlocked(allNew, nextState);
-  }, [onBadgeUnlocked]);
+  }, [userId, onBadgeUnlocked]);
 
-  // ─── Actions ────────────────────────────────────────────────────────────
+  // ─── Actions ─────────────────────────────────────────────────────────────
 
   const addEntry = useCallback((entry) => {
     const newEntry = { id: genId(), timestamp: new Date().toISOString(), date: getTodayStr(), ...entry };
     dispatch({ type: 'ADD_ENTRY', payload: newEntry });
+    if (userId) Sync.pushEntry(newEntry, userId).catch(() => {});
 
-    // Badge check against projected next state
     const nextEntries = [...state.entries, newEntry];
     const nextStats   = computeStats(nextEntries);
-    const nextState   = { ...state, entries: nextEntries };
-    runBadgeCheck(nextState, nextStats);
+    runBadgeCheck({ ...state, entries: nextEntries }, nextStats);
 
     return newEntry;
-  }, [state, runBadgeCheck]);
+  }, [state, userId, runBadgeCheck]);
 
   const editEntry = useCallback((entry) => {
     dispatch({ type: 'EDIT_ENTRY', payload: entry });
-  }, []);
+    if (userId) Sync.pushEntry(entry, userId).catch(() => {});
+  }, [userId]);
 
   const deleteEntry = useCallback((id) => {
     dispatch({ type: 'DELETE_ENTRY', payload: id });
-  }, []);
+    if (userId) Sync.removeEntry(id).catch(() => {});
+  }, [userId]);
 
   const addTask = useCallback((task) => {
     const newTask = { id: genId(), ...task };
     dispatch({ type: 'ADD_TASK', payload: newTask });
+    if (userId) Sync.pushTask(newTask, userId).catch(() => {});
     return newTask;
-  }, []);
+  }, [userId]);
 
   const editTask = useCallback((task) => {
     dispatch({ type: 'EDIT_TASK', payload: task });
-  }, []);
+    if (userId) Sync.pushTask(task, userId).catch(() => {});
+  }, [userId]);
 
   const deleteTask = useCallback((id) => {
     dispatch({ type: 'DELETE_TASK', payload: id });
-  }, []);
+    if (userId) Sync.removeTask(id).catch(() => {});
+  }, [userId]);
 
   const completeTask = useCallback((task) => {
-    // Completing a task logs an entry with the task's custom token value
     const newEntry = {
-      id: genId(),
+      id:        genId(),
       timestamp: new Date().toISOString(),
-      date: getTodayStr(),
-      area: task.area,
-      tokens: task.tokens,
-      note: `Task: ${task.name}`,
-      taskId: task.id,
+      date:      getTodayStr(),
+      area:      task.area,
+      tokens:    task.tokens,
+      note:      `Task: ${task.name}`,
+      taskId:    task.id,
     };
     dispatch({ type: 'ADD_ENTRY', payload: newEntry });
+    if (userId) Sync.pushEntry(newEntry, userId).catch(() => {});
 
     const nextEntries = [...state.entries, newEntry];
     const nextStats   = computeStats(nextEntries);
-    const nextState   = { ...state, entries: nextEntries };
-    runBadgeCheck(nextState, nextStats);
+    runBadgeCheck({ ...state, entries: nextEntries }, nextStats);
 
     return newEntry;
-  }, [state, runBadgeCheck]);
+  }, [state, userId, runBadgeCheck]);
 
   const addCustomBadge = useCallback((badge) => {
     const newBadge = { id: genId(), unlocked: false, ...badge };
     dispatch({ type: 'ADD_CUSTOM_BADGE', payload: newBadge });
+    if (userId) Sync.pushCustomBadge(newBadge, userId).catch(() => {});
 
-    // Check immediately if already met
     const nextState = { ...state, customBadges: [...state.customBadges, newBadge] };
     runBadgeCheck(nextState, stats);
 
     return newBadge;
-  }, [state, stats, runBadgeCheck]);
+  }, [state, stats, userId, runBadgeCheck]);
 
   const editCustomBadge = useCallback((badge) => {
     dispatch({ type: 'EDIT_CUSTOM_BADGE', payload: badge });
-  }, []);
+    if (userId) Sync.pushCustomBadge(badge, userId).catch(() => {});
+  }, [userId]);
 
   const deleteCustomBadge = useCallback((id) => {
     dispatch({ type: 'DELETE_CUSTOM_BADGE', payload: id });
-  }, []);
+    if (userId) Sync.removeCustomBadge(id).catch(() => {});
+  }, [userId]);
 
   const addUserQuote = useCallback((text) => {
-    dispatch({ type: 'ADD_USER_QUOTE', payload: text.trim() });
-  }, []);
+    const trimmed = text.trim();
+    dispatch({ type: 'ADD_USER_QUOTE', payload: trimmed });
+    if (userId) {
+      const next = [...state.userQuotes, trimmed];
+      Sync.pushSettings(userId, { ...state, userQuotes: next }).catch(() => {});
+    }
+  }, [state, userId]);
 
   const deleteUserQuote = useCallback((index) => {
     dispatch({ type: 'DELETE_USER_QUOTE', payload: index });
-  }, []);
+    if (userId) {
+      const next = state.userQuotes.filter((_, i) => i !== index);
+      Sync.pushSettings(userId, { ...state, userQuotes: next }).catch(() => {});
+    }
+  }, [state, userId]);
 
   const addUserVocab = useCallback((vocab) => {
-    dispatch({ type: 'ADD_USER_VOCAB', payload: { id: genId(), ...vocab } });
-  }, []);
+    const newVocab = { id: genId(), ...vocab };
+    dispatch({ type: 'ADD_USER_VOCAB', payload: newVocab });
+    if (userId) Sync.pushVocab(newVocab, userId).catch(() => {});
+  }, [userId]);
 
   const editUserVocab = useCallback((vocab) => {
     dispatch({ type: 'EDIT_USER_VOCAB', payload: vocab });
-  }, []);
+    if (userId) Sync.pushVocab(vocab, userId).catch(() => {});
+  }, [userId]);
 
   const deleteUserVocab = useCallback((id) => {
     dispatch({ type: 'DELETE_USER_VOCAB', payload: id });
-  }, []);
+    if (userId) Sync.removeVocab(id).catch(() => {});
+  }, [userId]);
 
   const toggleSound = useCallback(() => {
     dispatch({ type: 'TOGGLE_SOUND' });
-  }, []);
+    if (userId) {
+      Sync.pushSettings(userId, { ...state, soundOn: !state.soundOn }).catch(() => {});
+    }
+  }, [state, userId]);
 
   const importState = useCallback((imported) => {
     dispatch({ type: 'LOAD', payload: { ...DEFAULT_STATE, ...imported } });
