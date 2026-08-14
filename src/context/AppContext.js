@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useReducer, useEffect, useMemo, useCallback } from 'react';
 import { DEFAULT_STATE, saveState } from '../utils/storage';
-import { computeStats, checkBuiltinBadges, checkCustomBadges } from '../utils/stats';
-import { genId, getTodayStr } from '../utils/date';
+import { computeStats, computeAdultingStats, checkBuiltinBadges, checkCustomBadges } from '../utils/stats';
+import { genId, getTodayStr, getWeekKey } from '../utils/date';
 import * as Sync from '../lib/sync';
 
 const AppContext = createContext(null);
@@ -36,6 +36,27 @@ function reducer(state, action) {
 
     case 'DELETE_TASK':
       return { ...state, tasks: state.tasks.filter(t => t.id !== action.payload) };
+
+    case 'ADD_BUNDLE':
+      return { ...state, bundles: [...state.bundles, action.payload] };
+
+    case 'EDIT_BUNDLE':
+      return {
+        ...state,
+        bundles: state.bundles.map(b => b.id === action.payload.id ? action.payload : b),
+      };
+
+    case 'DELETE_BUNDLE':
+      return {
+        ...state,
+        bundles:           state.bundles.filter(b => b.id !== action.payload),
+        bundleCompletions: state.bundleCompletions.filter(c => c.bundleId !== action.payload),
+        // Also remove entries that were part of this bundle
+        entries:           state.entries.filter(e => e.bundleId !== action.payload),
+      };
+
+    case 'ADD_BUNDLE_COMPLETION':
+      return { ...state, bundleCompletions: [...state.bundleCompletions, action.payload] };
 
     case 'UNLOCK_BUILTIN_BADGES':
       return {
@@ -96,25 +117,26 @@ function reducer(state, action) {
 export function AppProvider({ children, initialState, userId, onBadgeUnlocked }) {
   const [state, dispatch] = useReducer(reducer, { ...DEFAULT_STATE, ...initialState });
 
-  // Auto-save to local cache on every state change (after first render)
   const isMounted = React.useRef(false);
   useEffect(() => {
     if (!isMounted.current) { isMounted.current = true; return; }
     saveState(state, userId).catch(() => {});
   }, [state]);
 
-  // On mount: pull from Supabase and hydrate (background, non-blocking)
   useEffect(() => {
     if (!userId) return;
     Sync.pullAll(userId)
       .then(remote => { dispatch({ type: 'LOAD', payload: remote }); })
-      .catch(() => {}); // offline — local cache is fine
+      .catch(() => {});
   }, [userId]);
 
-  // Recompute stats whenever entries change
-  const stats = useMemo(() => computeStats(state.entries), [state.entries]);
+  const stats         = useMemo(() => computeStats(state.entries), [state.entries]);
+  const adultingStats = useMemo(
+    () => computeAdultingStats(state.bundles, state.bundleCompletions),
+    [state.bundles, state.bundleCompletions]
+  );
 
-  // ─── Badge checking helper ───────────────────────────────────────────────
+  // ─── Badge checking ──────────────────────────────────────────────────────
 
   const runBadgeCheck = useCallback((nextState, nextStats) => {
     const newBuiltin = checkBuiltinBadges(nextStats, nextState.unlockedBuiltinIds);
@@ -133,7 +155,7 @@ export function AppProvider({ children, initialState, userId, onBadgeUnlocked })
     if (allNew.length > 0 && onBadgeUnlocked) onBadgeUnlocked(allNew, nextState);
   }, [userId, onBadgeUnlocked]);
 
-  // ─── Actions ─────────────────────────────────────────────────────────────
+  // ─── Entry actions ───────────────────────────────────────────────────────
 
   const addEntry = useCallback((entry) => {
     const newEntry = { id: genId(), timestamp: new Date().toISOString(), date: getTodayStr(), ...entry };
@@ -141,9 +163,7 @@ export function AppProvider({ children, initialState, userId, onBadgeUnlocked })
     if (userId) Sync.pushEntry(newEntry, userId).catch(() => {});
 
     const nextEntries = [...state.entries, newEntry];
-    const nextStats   = computeStats(nextEntries);
-    runBadgeCheck({ ...state, entries: nextEntries }, nextStats);
-
+    runBadgeCheck({ ...state, entries: nextEntries }, computeStats(nextEntries));
     return newEntry;
   }, [state, userId, runBadgeCheck]);
 
@@ -156,6 +176,8 @@ export function AppProvider({ children, initialState, userId, onBadgeUnlocked })
     dispatch({ type: 'DELETE_ENTRY', payload: id });
     if (userId) Sync.removeEntry(id).catch(() => {});
   }, [userId]);
+
+  // ─── Task actions ────────────────────────────────────────────────────────
 
   const addTask = useCallback((task) => {
     const newTask = { id: genId(), ...task };
@@ -188,20 +210,91 @@ export function AppProvider({ children, initialState, userId, onBadgeUnlocked })
     if (userId) Sync.pushEntry(newEntry, userId).catch(() => {});
 
     const nextEntries = [...state.entries, newEntry];
-    const nextStats   = computeStats(nextEntries);
-    runBadgeCheck({ ...state, entries: nextEntries }, nextStats);
-
+    runBadgeCheck({ ...state, entries: nextEntries }, computeStats(nextEntries));
     return newEntry;
   }, [state, userId, runBadgeCheck]);
+
+  // ─── Bundle actions ──────────────────────────────────────────────────────
+
+  const addBundle = useCallback((bundle) => {
+    const newBundle = { id: genId(), ...bundle };
+    dispatch({ type: 'ADD_BUNDLE', payload: newBundle });
+    if (userId) Sync.pushBundle(newBundle, userId).catch(() => {});
+    return newBundle;
+  }, [userId]);
+
+  const editBundle = useCallback((bundle) => {
+    dispatch({ type: 'EDIT_BUNDLE', payload: bundle });
+    if (userId) Sync.pushBundle(bundle, userId).catch(() => {});
+  }, [userId]);
+
+  const deleteBundle = useCallback((id) => {
+    dispatch({ type: 'DELETE_BUNDLE', payload: id });
+    if (userId) Sync.removeBundle(id).catch(() => {});
+  }, [userId]);
+
+  // Complete a single task within a bundle for today.
+  // Returns { entry, completion } where completion is non-null if the whole bundle just finished.
+  const completeBundleTask = useCallback((bundle, bundleTask) => {
+    const today = getTodayStr();
+
+    // Guard: already completed today
+    const alreadyDone = state.entries.some(
+      e => e.bundleId === bundle.id && e.bundleTaskId === bundleTask.id && e.date === today
+    );
+    if (alreadyDone) return null;
+
+    const newEntry = {
+      id:           genId(),
+      timestamp:    new Date().toISOString(),
+      date:         today,
+      area:         bundleTask.area,
+      tokens:       bundleTask.tokens,
+      note:         `${bundle.name}: ${bundleTask.name}`,
+      bundleId:     bundle.id,
+      bundleTaskId: bundleTask.id,
+    };
+    dispatch({ type: 'ADD_ENTRY', payload: newEntry });
+    if (userId) Sync.pushEntry(newEntry, userId).catch(() => {});
+
+    // Project next entries to check if bundle is now fully complete
+    const nextEntries = [...state.entries, newEntry];
+    const todayBundleTaskIds = new Set(
+      nextEntries
+        .filter(e => e.bundleId === bundle.id && e.date === today)
+        .map(e => e.bundleTaskId)
+    );
+    const allDone = bundle.tasks.every(t => todayBundleTaskIds.has(t.id));
+    const alreadyCompleted = state.bundleCompletions.some(
+      c => c.bundleId === bundle.id && c.date === today
+    );
+
+    let completion = null;
+    if (allDone && !alreadyCompleted) {
+      completion = {
+        id:          genId(),
+        bundleId:    bundle.id,
+        date:        today,
+        weekKey:     getWeekKey(today),
+        bonusTokens: bundle.bonusTokens,
+      };
+      dispatch({ type: 'ADD_BUNDLE_COMPLETION', payload: completion });
+      if (userId) Sync.pushBundleCompletion(completion, userId).catch(() => {});
+    }
+
+    // Badge checks use entry tokens only (bonus tokens are tracked separately)
+    runBadgeCheck({ ...state, entries: nextEntries }, computeStats(nextEntries));
+
+    return { entry: newEntry, completion };
+  }, [state, userId, runBadgeCheck]);
+
+  // ─── Other actions ───────────────────────────────────────────────────────
 
   const addCustomBadge = useCallback((badge) => {
     const newBadge = { id: genId(), unlocked: false, ...badge };
     dispatch({ type: 'ADD_CUSTOM_BADGE', payload: newBadge });
     if (userId) Sync.pushCustomBadge(newBadge, userId).catch(() => {});
-
-    const nextState = { ...state, customBadges: [...state.customBadges, newBadge] };
-    runBadgeCheck(nextState, stats);
-
+    runBadgeCheck({ ...state, customBadges: [...state.customBadges, newBadge] }, stats);
     return newBadge;
   }, [state, stats, userId, runBadgeCheck]);
 
@@ -219,16 +312,14 @@ export function AppProvider({ children, initialState, userId, onBadgeUnlocked })
     const trimmed = text.trim();
     dispatch({ type: 'ADD_USER_QUOTE', payload: trimmed });
     if (userId) {
-      const next = [...state.userQuotes, trimmed];
-      Sync.pushSettings(userId, { ...state, userQuotes: next }).catch(() => {});
+      Sync.pushSettings(userId, { ...state, userQuotes: [...state.userQuotes, trimmed] }).catch(() => {});
     }
   }, [state, userId]);
 
   const deleteUserQuote = useCallback((index) => {
     dispatch({ type: 'DELETE_USER_QUOTE', payload: index });
     if (userId) {
-      const next = state.userQuotes.filter((_, i) => i !== index);
-      Sync.pushSettings(userId, { ...state, userQuotes: next }).catch(() => {});
+      Sync.pushSettings(userId, { ...state, userQuotes: state.userQuotes.filter((_, i) => i !== index) }).catch(() => {});
     }
   }, [state, userId]);
 
@@ -262,27 +353,19 @@ export function AppProvider({ children, initialState, userId, onBadgeUnlocked })
   const value = useMemo(() => ({
     state,
     stats,
-    addEntry,
-    editEntry,
-    deleteEntry,
-    addTask,
-    editTask,
-    deleteTask,
-    completeTask,
-    addCustomBadge,
-    editCustomBadge,
-    deleteCustomBadge,
-    addUserQuote,
-    deleteUserQuote,
-    addUserVocab,
-    editUserVocab,
-    deleteUserVocab,
-    toggleSound,
-    importState,
-  }), [
-    state, stats,
+    adultingStats,
     addEntry, editEntry, deleteEntry,
     addTask, editTask, deleteTask, completeTask,
+    addBundle, editBundle, deleteBundle, completeBundleTask,
+    addCustomBadge, editCustomBadge, deleteCustomBadge,
+    addUserQuote, deleteUserQuote,
+    addUserVocab, editUserVocab, deleteUserVocab,
+    toggleSound, importState,
+  }), [
+    state, stats, adultingStats,
+    addEntry, editEntry, deleteEntry,
+    addTask, editTask, deleteTask, completeTask,
+    addBundle, editBundle, deleteBundle, completeBundleTask,
     addCustomBadge, editCustomBadge, deleteCustomBadge,
     addUserQuote, deleteUserQuote,
     addUserVocab, editUserVocab, deleteUserVocab,

@@ -6,25 +6,31 @@ export async function pullAll(userId) {
   const [
     { data: entries },
     { data: tasks },
+    { data: bundles },
+    { data: bundleCompletions },
     { data: customBadges },
     { data: userVocab },
     { data: settings },
   ] = await Promise.all([
     supabase.from('entries').select('*').eq('user_id', userId),
     supabase.from('tasks').select('*').eq('user_id', userId),
+    supabase.from('bundles').select('*, bundle_tasks(*)').eq('user_id', userId),
+    supabase.from('bundle_completions').select('*').eq('user_id', userId),
     supabase.from('custom_badges').select('*').eq('user_id', userId),
     supabase.from('user_vocab').select('*').eq('user_id', userId),
     supabase.from('user_settings').select('*').eq('user_id', userId).maybeSingle(),
   ]);
 
   return {
-    entries:            (entries      || []).map(dbToEntry),
-    tasks:              (tasks        || []).map(dbToTask),
-    customBadges:       (customBadges || []).map(dbToCustomBadge),
-    userVocab:          (userVocab    || []).map(dbToVocab),
+    entries:            (entries            || []).map(dbToEntry),
+    tasks:              (tasks              || []).map(dbToTask),
+    bundles:            (bundles            || []).map(dbToBundle),
+    bundleCompletions:  (bundleCompletions  || []).map(dbToBundleCompletion),
+    customBadges:       (customBadges       || []).map(dbToCustomBadge),
+    userVocab:          (userVocab          || []).map(dbToVocab),
     unlockedBuiltinIds: settings?.unlocked_builtin_ids || [],
-    userQuotes:         settings?.user_quotes           || [],
-    soundOn:            settings?.sound_on              ?? true,
+    userQuotes:         settings?.user_quotes          || [],
+    soundOn:            settings?.sound_on             ?? true,
   };
 }
 
@@ -46,6 +52,49 @@ export async function removeTask(id) {
   await supabase.from('tasks').delete().eq('id', id);
 }
 
+export async function pushBundle(bundle, userId) {
+  // Upsert the bundle row
+  await supabase.from('bundles').upsert({
+    id:           bundle.id,
+    user_id:      userId,
+    name:         bundle.name,
+    bonus_tokens: bundle.bonusTokens,
+    updated_at:   new Date().toISOString(),
+  });
+  // Upsert all tasks within the bundle
+  if (bundle.tasks && bundle.tasks.length > 0) {
+    await supabase.from('bundle_tasks').upsert(
+      bundle.tasks.map((t, i) => ({
+        id:         t.id,
+        bundle_id:  bundle.id,
+        user_id:    userId,
+        name:       t.name,
+        area:       t.area,
+        tokens:     t.tokens,
+        sort_order: i,
+        updated_at: new Date().toISOString(),
+      }))
+    );
+  }
+}
+
+export async function removeBundle(id) {
+  await supabase.from('bundles').delete().eq('id', id);
+  // bundle_tasks cascade deletes via FK
+}
+
+export async function pushBundleCompletion(completion, userId) {
+  await supabase.from('bundle_completions').upsert({
+    id:           completion.id,
+    bundle_id:    completion.bundleId,
+    user_id:      userId,
+    date:         completion.date,
+    week_key:     completion.weekKey,
+    bonus_tokens: completion.bonusTokens,
+    updated_at:   new Date().toISOString(),
+  });
+}
+
 export async function pushCustomBadge(badge, userId) {
   await supabase.from('custom_badges').upsert(customBadgeToDb(badge, userId));
 }
@@ -64,11 +113,11 @@ export async function removeVocab(id) {
 
 export async function pushSettings(userId, { soundOn, unlockedBuiltinIds, userQuotes }) {
   await supabase.from('user_settings').upsert({
-    user_id:             userId,
-    sound_on:            soundOn,
+    user_id:              userId,
+    sound_on:             soundOn,
     unlocked_builtin_ids: unlockedBuiltinIds,
-    user_quotes:         userQuotes,
-    updated_at:          new Date().toISOString(),
+    user_quotes:          userQuotes,
+    updated_at:           new Date().toISOString(),
   });
 }
 
@@ -76,27 +125,31 @@ export async function pushSettings(userId, { soundOn, unlockedBuiltinIds, userQu
 
 function entryToDb(e, userId) {
   return {
-    id:         e.id,
-    user_id:    userId,
-    date:       e.date,
-    timestamp:  e.timestamp,
-    area:       e.area,
-    tokens:     e.tokens,
-    note:       e.note    ?? null,
-    task_id:    e.taskId  ?? null,
-    updated_at: new Date().toISOString(),
+    id:             e.id,
+    user_id:        userId,
+    date:           e.date,
+    timestamp:      e.timestamp,
+    area:           e.area,
+    tokens:         e.tokens,
+    note:           e.note          ?? null,
+    task_id:        e.taskId        ?? null,
+    bundle_id:      e.bundleId      ?? null,
+    bundle_task_id: e.bundleTaskId  ?? null,
+    updated_at:     new Date().toISOString(),
   };
 }
 
 function dbToEntry(row) {
   return {
-    id:        row.id,
-    date:      row.date,
-    timestamp: row.timestamp,
-    area:      row.area,
-    tokens:    row.tokens,
-    note:      row.note,
-    taskId:    row.task_id,
+    id:           row.id,
+    date:         row.date,
+    timestamp:    row.timestamp,
+    area:         row.area,
+    tokens:       row.tokens,
+    note:         row.note,
+    taskId:       row.task_id,
+    bundleId:     row.bundle_id,
+    bundleTaskId: row.bundle_task_id,
   };
 }
 
@@ -113,6 +166,28 @@ function taskToDb(t, userId) {
 
 function dbToTask(row) {
   return { id: row.id, name: row.name, area: row.area, tokens: row.tokens };
+}
+
+function dbToBundle(row) {
+  const tasks = (row.bundle_tasks || [])
+    .sort((a, b) => a.sort_order - b.sort_order)
+    .map(t => ({ id: t.id, name: t.name, area: t.area, tokens: t.tokens }));
+  return {
+    id:          row.id,
+    name:        row.name,
+    bonusTokens: row.bonus_tokens,
+    tasks,
+  };
+}
+
+function dbToBundleCompletion(row) {
+  return {
+    id:          row.id,
+    bundleId:    row.bundle_id,
+    date:        row.date,
+    weekKey:     row.week_key,
+    bonusTokens: row.bonus_tokens,
+  };
 }
 
 function customBadgeToDb(b, userId) {
@@ -133,14 +208,14 @@ function customBadgeToDb(b, userId) {
 
 function dbToCustomBadge(row) {
   return {
-    id:          row.id,
-    name:        row.name,
-    icon:        row.icon,
-    desc:        row.description,
-    metric:      row.metric,
-    area:        row.area,
-    threshold:   row.threshold,
-    unlocked:    row.unlocked,
+    id:           row.id,
+    name:         row.name,
+    icon:         row.icon,
+    desc:         row.description,
+    metric:       row.metric,
+    area:         row.area,
+    threshold:    row.threshold,
+    unlocked:     row.unlocked,
     unlockedDate: row.unlocked_date,
   };
 }

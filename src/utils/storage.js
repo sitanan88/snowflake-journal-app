@@ -2,14 +2,15 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const BASE_KEY = 'snowflake-journal-v1';
 
-// User-scoped key so multiple accounts on the same device don't collide
 function storageKey(userId) {
   return userId ? `${BASE_KEY}-${userId}` : BASE_KEY;
 }
 
 export const DEFAULT_STATE = {
-  entries:            [], // { id, date, timestamp, area, tokens, note, taskId? }
+  entries:            [], // { id, date, timestamp, area, tokens, note, taskId?, bundleId?, bundleTaskId? }
   tasks:              [], // { id, name, area, tokens }
+  bundles:            [], // { id, name, tasks: [{id, name, area, tokens}], bonusTokens }
+  bundleCompletions:  [], // { id, bundleId, date, weekKey, bonusTokens }
   customBadges:       [], // { id, name, icon, desc, metric, area?, threshold, unlocked, unlockedDate? }
   unlockedBuiltinIds: [],
   userQuotes:         [], // strings

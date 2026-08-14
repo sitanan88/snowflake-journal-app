@@ -10,6 +10,7 @@ export const AREAS = [
   { id: 'health',       name: 'Health',       icon: '🩺', color: '#F45C5C', tokens: 10 },
   { id: 'fitness',      name: 'Fitness',      icon: '💪', color: '#FF7043', tokens: 10 },
   { id: 'goals',        name: 'Goals',        icon: '⭐', color: '#FFC107', tokens: 10 },
+  { id: 'hygiene',      name: 'Hygiene',      icon: '🧼', color: '#A8E6CF', tokens: 10 },
 ];
 
 export const AREA_MAP = Object.fromEntries(AREAS.map(a => [a.id, a]));

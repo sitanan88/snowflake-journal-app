@@ -15,7 +15,7 @@ const MIN_R     = 12;
 const MAX_DEEDS = 50;
 
 function armAngle(i) {
-  return (i * 2 * Math.PI / 11) - Math.PI / 2;
+  return (i * 2 * Math.PI / 12) - Math.PI / 2;
 }
 
 function computeBranches(angle, length, fraction) {
