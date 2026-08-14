@@ -57,13 +57,6 @@ export default function BadgeCard({ badge, unlocked, justUnlocked }) {
         </Animated.Text>
       </View>
 
-      {/* Color overlay — fades in when unlocked */}
-      {unlocked && (
-        <Animated.View
-          style={[styles.colorOverlay, { opacity: colorOpacity }]}
-          pointerEvents="none"
-        />
-      )}
 
       <Text style={[styles.name, !unlocked && styles.nameLocked]} numberOfLines={1}>
         {badge.name}
