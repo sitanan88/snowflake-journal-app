@@ -13,7 +13,7 @@ import { COLORS, SPACING, RADIUS, FONT } from '../theme';
 
 // ─── Bundle card ─────────────────────────────────────────────────────────────
 
-function BundleCard({ bundle, todayEntries, todayCompletions, onCompleteTask, onEdit, onDelete }) {
+function BundleCard({ bundle, todayEntries, todayCompletions, onCompleteTask, onUncompleteTask, onEdit, onDelete }) {
   const today = getTodayStr();
   const [confirmDelete, setConfirmDelete] = useState(false);
   const deleteTimer = React.useRef(null);
@@ -49,7 +49,11 @@ function BundleCard({ bundle, todayEntries, todayCompletions, onCompleteTask, on
       <View style={styles.bundleHeader}>
         <View style={styles.bundleTitleRow}>
           <Text style={styles.bundleName}>{bundle.name}</Text>
-          {isComplete && <Text style={styles.completeTag}>Complete</Text>}
+          {isComplete && (
+            <Text style={styles.completeTag}>
+              {wasCompleted ? `Complete ✦ +${bundle.bonusTokens}` : 'Complete'}
+            </Text>
+          )}
         </View>
         <View style={styles.bundleMeta}>
           <Text style={styles.bundleProgress}>
@@ -59,7 +63,7 @@ function BundleCard({ bundle, todayEntries, todayCompletions, onCompleteTask, on
         </View>
       </View>
 
-      {/* Task rows */}
+      {/* Task rows — tap to complete, tap again to undo */}
       {bundle.tasks.map(task => {
         const done = doneTaskIds.has(task.id);
         const area = AREA_MAP[task.area] ?? AREA_MAP['goals'];
@@ -67,9 +71,10 @@ function BundleCard({ bundle, todayEntries, todayCompletions, onCompleteTask, on
           <TouchableOpacity
             key={task.id}
             style={[styles.bundleTask, done && styles.bundleTaskDone]}
-            onPress={() => !done && !wasCompleted && onCompleteTask(bundle, task)}
-            activeOpacity={done ? 1 : 0.75}
-            disabled={done}
+            onPress={() => done ? onUncompleteTask(bundle, task) : onCompleteTask(bundle, task)}
+            activeOpacity={0.75}
+            accessibilityRole="button"
+            accessibilityLabel={done ? `Undo ${task.name}` : `Complete ${task.name}`}
           >
             <View style={[styles.taskCircle, done && { backgroundColor: area.color, borderColor: area.color }]}>
               {done && <Text style={styles.taskCheck}>✓</Text>}
@@ -81,7 +86,9 @@ function BundleCard({ bundle, todayEntries, todayCompletions, onCompleteTask, on
                 <Text style={[styles.areaName, { color: area.color }]}>{area.name}</Text>
               </View>
             </View>
-            <Text style={[styles.taskTokens, done && styles.taskTokensDone]}>✦ {task.tokens}</Text>
+            {done
+              ? <Text style={styles.undoHint}>↺ undo</Text>
+              : <Text style={styles.taskTokens}>✦ {task.tokens}</Text>}
           </TouchableOpacity>
         );
       })}
@@ -105,7 +112,8 @@ function BundleCard({ bundle, todayEntries, todayCompletions, onCompleteTask, on
 
 export default function TasksScreen({ showToast }) {
   const { state, adultingStats, addTask, editTask, deleteTask, completeTask,
-          addBundle, editBundle, deleteBundle, completeBundleTask } = useApp();
+          addBundle, editBundle, deleteBundle, completeBundleTask,
+          uncompleteBundleTask } = useApp();
   const today = getTodayStr();
 
   const [taskSheetOpen,   setTaskSheetOpen]   = useState(false);
@@ -166,6 +174,14 @@ export default function TasksScreen({ showToast }) {
       showToast?.(`Bundle complete · +${result.completion.bonusTokens} bonus tokens`, 'success');
     }
   }, [completeBundleTask, showToast]);
+
+  const handleUncompleteBundleTask = useCallback((bundle, task) => {
+    const result = uncompleteBundleTask(bundle, task);
+    if (!result) return;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
+    const bonusNote = result.bonus > 0 ? ` and ${result.bonus} bonus` : '';
+    showToast?.(`Undone · −${result.tokens} tokens${bonusNote}`, 'info');
+  }, [uncompleteBundleTask, showToast]);
 
   return (
     <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
@@ -244,6 +260,7 @@ export default function TasksScreen({ showToast }) {
               todayEntries={todayEntries}
               todayCompletions={todayCompletions}
               onCompleteTask={handleCompleteBundleTask}
+              onUncompleteTask={handleUncompleteBundleTask}
               onEdit={openEditBundle}
               onDelete={handleDeleteBundle}
             />
@@ -409,7 +426,7 @@ const styles = StyleSheet.create({
     borderBottomColor: COLORS.border,
   },
   bundleTaskDone: {
-    opacity: 0.5,
+    opacity: 0.7,
   },
   taskCircle: {
     width:          22,
@@ -461,6 +478,11 @@ const styles = StyleSheet.create({
   },
   taskTokensDone: {
     color: COLORS.textMuted,
+  },
+  undoHint: {
+    color:      COLORS.accent,
+    fontSize:   FONT.sm,
+    fontWeight: '600',
   },
   bundleActions: {
     flexDirection:     'row',
