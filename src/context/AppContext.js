@@ -58,6 +58,17 @@ function reducer(state, action) {
     case 'ADD_BUNDLE_COMPLETION':
       return { ...state, bundleCompletions: [...state.bundleCompletions, action.payload] };
 
+    // Un-do a bundle task: drop its entry for the day and any day-completion
+    // bonus that entry earned (the bundle is no longer fully done).
+    case 'UNCOMPLETE_BUNDLE_TASK': {
+      const { entryIds, completionIds } = action.payload;
+      return {
+        ...state,
+        entries:           state.entries.filter(e => !entryIds.includes(e.id)),
+        bundleCompletions: state.bundleCompletions.filter(c => !completionIds.includes(c.id)),
+      };
+    }
+
     case 'UNLOCK_BUILTIN_BADGES':
       return {
         ...state,
@@ -173,9 +184,26 @@ export function AppProvider({ children, initialState, userId, onBadgeUnlocked })
   }, [userId]);
 
   const deleteEntry = useCallback((id) => {
-    dispatch({ type: 'DELETE_ENTRY', payload: id });
+    const entry = state.entries.find(e => e.id === id);
+
+    // Deleting a bundle task's entry also drops that day's bundle completion —
+    // the bundle is no longer fully done, so the bonus should not stick around.
+    const completions = entry?.bundleId
+      ? state.bundleCompletions.filter(c => c.bundleId === entry.bundleId && c.date === entry.date)
+      : [];
+
+    if (completions.length > 0) {
+      dispatch({
+        type: 'UNCOMPLETE_BUNDLE_TASK',
+        payload: { entryIds: [id], completionIds: completions.map(c => c.id) },
+      });
+      if (userId) completions.forEach(c => Sync.removeBundleCompletion(c.id).catch(() => {}));
+    } else {
+      dispatch({ type: 'DELETE_ENTRY', payload: id });
+    }
+
     if (userId) Sync.removeEntry(id).catch(() => {});
-  }, [userId]);
+  }, [state, userId]);
 
   // ─── Task actions ────────────────────────────────────────────────────────
 
@@ -288,6 +316,41 @@ export function AppProvider({ children, initialState, userId, onBadgeUnlocked })
     return { entry: newEntry, completion };
   }, [state, userId, runBadgeCheck]);
 
+  // Un-complete a single bundle task for today (accidental tap / correction).
+  // Removes today's entry for that task and, if the bundle had been marked
+  // complete today, removes that completion so the bonus is not kept.
+  // Badges are never revoked — consistent with the rest of the app.
+  const uncompleteBundleTask = useCallback((bundle, bundleTask) => {
+    const today = getTodayStr();
+
+    const doneEntries = state.entries.filter(
+      e => e.bundleId === bundle.id && e.bundleTaskId === bundleTask.id && e.date === today
+    );
+    if (doneEntries.length === 0) return null;
+
+    const completions = state.bundleCompletions.filter(
+      c => c.bundleId === bundle.id && c.date === today
+    );
+
+    dispatch({
+      type: 'UNCOMPLETE_BUNDLE_TASK',
+      payload: {
+        entryIds:      doneEntries.map(e => e.id),
+        completionIds: completions.map(c => c.id),
+      },
+    });
+
+    if (userId) {
+      doneEntries.forEach(e => Sync.removeEntry(e.id).catch(() => {}));
+      completions.forEach(c => Sync.removeBundleCompletion(c.id).catch(() => {}));
+    }
+
+    return {
+      tokens: doneEntries.reduce((sum, e) => sum + (e.tokens || 0), 0),
+      bonus:  completions.reduce((sum, c) => sum + (c.bonusTokens || 0), 0),
+    };
+  }, [state, userId]);
+
   // ─── Other actions ───────────────────────────────────────────────────────
 
   const addCustomBadge = useCallback((badge) => {
@@ -356,7 +419,7 @@ export function AppProvider({ children, initialState, userId, onBadgeUnlocked })
     adultingStats,
     addEntry, editEntry, deleteEntry,
     addTask, editTask, deleteTask, completeTask,
-    addBundle, editBundle, deleteBundle, completeBundleTask,
+    addBundle, editBundle, deleteBundle, completeBundleTask, uncompleteBundleTask,
     addCustomBadge, editCustomBadge, deleteCustomBadge,
     addUserQuote, deleteUserQuote,
     addUserVocab, editUserVocab, deleteUserVocab,
@@ -365,7 +428,7 @@ export function AppProvider({ children, initialState, userId, onBadgeUnlocked })
     state, stats, adultingStats,
     addEntry, editEntry, deleteEntry,
     addTask, editTask, deleteTask, completeTask,
-    addBundle, editBundle, deleteBundle, completeBundleTask,
+    addBundle, editBundle, deleteBundle, completeBundleTask, uncompleteBundleTask,
     addCustomBadge, editCustomBadge, deleteCustomBadge,
     addUserQuote, deleteUserQuote,
     addUserVocab, editUserVocab, deleteUserVocab,

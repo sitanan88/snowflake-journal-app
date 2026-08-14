@@ -61,10 +61,11 @@ export async function pushBundle(bundle, userId) {
     bonus_tokens: bundle.bonusTokens,
     updated_at:   new Date().toISOString(),
   });
+  const tasks = bundle.tasks || [];
   // Upsert all tasks within the bundle
-  if (bundle.tasks && bundle.tasks.length > 0) {
+  if (tasks.length > 0) {
     await supabase.from('bundle_tasks').upsert(
-      bundle.tasks.map((t, i) => ({
+      tasks.map((t, i) => ({
         id:         t.id,
         bundle_id:  bundle.id,
         user_id:    userId,
@@ -76,6 +77,10 @@ export async function pushBundle(bundle, userId) {
       }))
     );
   }
+  // Drop rows for tasks removed while editing, so they don't come back on pull
+  let prune = supabase.from('bundle_tasks').delete().eq('bundle_id', bundle.id);
+  if (tasks.length > 0) prune = prune.not('id', 'in', `(${tasks.map(t => t.id).join(',')})`);
+  await prune;
 }
 
 export async function removeBundle(id) {
@@ -93,6 +98,10 @@ export async function pushBundleCompletion(completion, userId) {
     bonus_tokens: completion.bonusTokens,
     updated_at:   new Date().toISOString(),
   });
+}
+
+export async function removeBundleCompletion(id) {
+  await supabase.from('bundle_completions').delete().eq('id', id);
 }
 
 export async function pushCustomBadge(badge, userId) {
